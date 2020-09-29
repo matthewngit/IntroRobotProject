@@ -3,7 +3,7 @@
 
   <!-- ROS PARAMETERS -->
   <!-- Initial robot pose in Gazebo: change for levels A, C or E (F for demo)-->
-  <arg name="student_level"         default="F"/>
+  <arg name="student_level"         default="E"/>
 
   <!-- System level -->
   <arg name="namespace_tiago"     default="/"/>
@@ -17,7 +17,7 @@
 
 
   <!-- Navigation -->
-  <arg name="provide_map"     default="false"/>
+  <arg name="provide_map"     default="true"/>
   <arg name="localization"    default="amcl"/>
   <arg name="map_path"        default="$(find robotics_project)/pal/tiago_maps/config"/>
   <arg name="global_planner"  default="navfn"/>
@@ -50,7 +50,7 @@
     </node> -->
 
     <!-- Project RGBD point cloud to laser-scan -->
-<!--     <include file="$(find tiago_laser_sensors)/launch/rgbd_depth_laser.launch">
+     <include file="$(find tiago_laser_sensors)/launch/rgbd_depth_laser.launch">
       <arg name="image"     value="xtion/depth_registered/image_raw"/>
       <arg name="scan"      value="rgbd_scan"/>
       <arg name="multiple"  value="$(arg multiple)"/>
@@ -58,13 +58,13 @@
     </include> -->
 
     <!-- AMCL Localization -->
-    <!-- <include file="$(find tiago_2dnav)/launch/localization_$(arg localization).launch">
+     <include file="$(find tiago_2dnav)/launch/localization_$(arg localization).launch">
       <arg name="multiple"  value="$(arg multiple)"/>
       <arg name="tf_prefix" value="$(arg tf_prefix)"/>
     </include> -->
 
     <!-- Planning: move_base stack -->
-    <!-- <include file="$(find tiago_2dnav)/launch/move_$(arg planner).launch">
+    <include file="$(find tiago_2dnav)/launch/move_$(arg planner).launch">
       <arg name="global_planner" value="$(arg global_planner)"/>
       <arg name="local_planner"  value="$(arg local_planner)"/>
       <arg name="public_sim"     value="$(arg public_sim)"/>
@@ -76,40 +76,40 @@
   <group ns="$(arg namespace_project)">
     <!-- Mission planner -->
     <node pkg="robotics_project" type="sm_students.py" name="logic_state_machine" output="screen">
-      <param name="global_loc_srv" value=""/>
-      <param name="clear_costmaps_srv"  value=""/>
-      <param name="pick_srv"            value=""/>
-      <param name="place_srv"           value=""/>
+      <param name="global_loc_srv"      value="/global_localization"/>
+      <param name="clear_costmaps_srv"  value="/move_base/clear_costmaps"/>
+      <param name="pick_srv"            value="/$(arg namespace_project)/pick_the_cube"/>
+      <param name="place_srv"           value="/$(arg namespace_project)/place_the_cube"/>
       <param name="nav_goal_topic"      value=""/>
       <param name="cmd_vel_topic"       value="/key_vel"/>
-      <param name="move_base_frame"     value=""/>
-      <param name="pick_pose_topic"     value=""/>
-      <param name="place_pose_topic"    value=""/>
-      <param name="aruco_pose_topic"    value=""/>
+      <param name="move_base_frame"     value="/base_footprint"/> <!-- Try base_link / base_footprint?-->
+      <param name="pick_pose_topic"     value="/pick_pose_topic_val"/>
+      <param name="place_pose_topic"    value="/place_pose_topic_val"/>
+      <param name="aruco_pose_topic"    value="/aruco_marker_topic"/>
       <param name="cube_pose"           value="0.50306828716, 0.0245718046511, 0.915538062216, 0.0144467629456, 0.706141958739, 0.707257659069, -0.0306827123383"/>
-      <param name="robot_base_frame"          value="" />
+      <param name="robot_base_frame"    value="/base_link" />  <!-- Try base_link / base_footprint?-->
       <param name="move_head_srv"       value="/$(arg namespace_project)/move_head_gui"/>
-      <param name="amcl_estimate"  value="" />
-      <param name="move_base_feedback"  value="" />
+      <param name="amcl_estimate"       value="map" />
+      <param name="move_base_feedback"  value="map" />
     </node>
 
     <!-- Goal robot poses for navigation -->
-<!--     <node pkg="robotics_project" type="poses_pub.py" name="poses_publisher" output="screen">
+     <node pkg="robotics_project" type="poses_pub.py" name="poses_publisher" output="screen">
       <param name="pick_pose"         value="-1.1480, -6.1, -0.001, 0.0, 0.0, -0.709307863674, 0.70489882574"/>
       <param name="place_pose"        value="2.6009, -1.7615, 0.0, 0.0, 0.0, 0.0, 1"/>
-      <param name="pick_pose_topic"   value="/place_holder1"/>
-      <param name="place_pose_topic"  value="/place_holder2"/>
-      <param name="map_frame"   value="/place_holder3"/>
-    </node> -->
+      <param name="pick_pose_topic"   value="/pick_pose_topic_val"/>
+      <param name="place_pose_topic"  value="/place_pose_topic_val"/>
+      <param name="map_frame"         value="map"/>
+    </node>
 
     <!-- Node exposing service to trigger the pick and place -->
     <node pkg="robotics_project" name="manipulation_client" type="manipulation_client.py" output="screen">  
-      <param name="marker_pose_topic"   value="/place_holder4"/>
-      <param name="pick_srv"            value="/place_holder5"/>
-      <param name="place_srv"           value="/place_holder6"/>
+      <param name="marker_pose_topic"   value="/aruco_marker_topic"/>
+      <param name="pick_srv"            value="/$(arg namespace_project)/pick_the_cube"/>
+      <param name="place_srv"           value="/$(arg namespace_project)/place_the_cube"/>
       <param name="move_head_srv"       value="/$(arg namespace_project)/move_head_gui"/>
-      <param name="pickup_marker_pose"  value="/place_holder8"/>
-      <param name="place_marker_pose"   value="/place_holder9"/>
+      <param name="pickup_marker_pose"  value="/pickup_marker"/>
+      <param name="place_marker_pose"   value="/place_marker"/>
     </node>
 
     <!-- Aruco marker detector -->
@@ -121,19 +121,31 @@
         <param name="marker_pose_topic"   value="/place_holder12"/>
         <param name="robot_base_frame"          value=""/>
     </node> -->
+  <!-- Left a copy of this just in case^ -->
+
+
+    <!-- Aruco marker detector (copy) -->
+    <node pkg="aruco_ros" type="single"   name="aruco_single" output="screen">
+        <param name="camera_frame"        value="xtion_rgb_optical_frame"/>
+        <param name="aruco_frame"         value="aruco_frame" />
+        <remap from="/camera_info"        to=   "/xtion/rgb/camera_info" />
+        <remap from="/image"              to=   "/xtion/rgb/image_rect_color" />
+        <param name="marker_pose_topic"   value="/aruco_marker_topic"/>
+        <param name="robot_base_frame"    value="/base_link"/> <!-- Try base_link / base_footprint?-->
+    </node>
   </group>
 
-  <!-- This node had to me moved out of the group for the PlanningSceneInterface() to be constructed -->
+  <!-- This node had to be moved out of the group for the PlanningSceneInterface() to be constructed -->
   <!-- Arm manipulation node -->
   <node pkg="robotics_project" name="manipulation_server" type="manipulation_server.py" output="screen">
       <rosparam command="load" file="$(find robotics_project)/config/pick_and_place_params.yaml" />
-      <param name="pickup_marker_pose"  value="/place_holder10" />
-      <param name="place_marker_pose"   value="/place_holder11" />
+      <param name="pickup_marker_pose"  value="/pickup_marker"/>
+      <param name="place_marker_pose"   value="/place_marker"/>
   </node>
 
 
   <!-- Map providers -->
-<!--   <group if="$(arg provide_map)">
+  <group if="$(arg provide_map)">
     <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_path)/map.yaml"/>
     <node name="relay_map" pkg="topic_tools" type="relay" args="/map /vo_map"/>
   </group> -->

@@ -30,14 +30,27 @@ class StateMachine(object):
         # Access rosparams
         self.cmd_vel_top = rospy.get_param(rospy.get_name() + '/cmd_vel_topic')
         self.mv_head_srv_nm = rospy.get_param(rospy.get_name() + '/move_head_srv')
+        self.pick_srv_nm = rospy.get_param(rospy.get_name() + '/pick_srv')
+        self.place_srv_nm = rospy.get_param(rospy.get_name() + '/place_srv')
+        self.pick_pose_top = rospy.get_param(rospy.get_name() + '/pick_pose_topic')
+        self.aruco_pose_top = rospy.get_param(rospy.get_name() + '/aruco_pose_topic')
+        self.place_pose_top = rospy.get_param(rospy.get_name() + '/place_pose_topic')
+        self.localization_srv_nm = rospy.get_param(rospy.get_name() + '/global_loc_srv')
+        self.clear_cmaps_srv_nm = rospy.get_param(rospy.get_name() + '/clear_costmaps_srv')
+
+        self.cube_location = rospy.get_param(rospy.get_name() + '/cube_pose')
 
         # Subscribe to topics
+        # Probably subscribe to topic checking gripper status?
 
         # Wait for service providers
-        rospy.wait_for_service(self.mv_head_srv_nm, timeout=30)
+        rospy.wait_for_service(self.mv_head_srv_nm, timeout = 30)
+        rospy.wait_for_service(self.pick_srv_nm, timeout = 30)
+        rospy.wait_for_service(self.place_srv_nm, timeout = 30)
 
         # Instantiate publishers
         self.cmd_vel_pub = rospy.Publisher(self.cmd_vel_top, Twist, queue_size=10)
+        self.aruco_pose_pub = rospy.Publisher(self.aruco_pose_top, PoseStamped, queue_size=10)
 
         # Set up action clients
         rospy.loginfo("%s: Waiting for play_motion action server...", self.node_name)
@@ -47,10 +60,21 @@ class StateMachine(object):
             exit()
         rospy.loginfo("%s: Connected to play_motion action server", self.node_name)
 
+        rospy.sleep(1)
+        
+        rospy.loginfo("%s: Waiting for move_base action server...", self.node_name)
+        self.move_base_ac = SimpleActionClient("/move_base", MoveBaseAction)
+        if not self.move_base_ac.wait_for_server(rospy.Duration(1000)):
+            rospy.logerr("%s: Could not connect to /move_base action server", self.node_name)
+            exit()
+        rospy.loginfo("%s: Connected to move_base action server", self.node_name)
+        
+
         # Init state machine
         self.state = 0
         rospy.sleep(3)
-        self.check_states()
+        #self.check_states()
+        self.e_level_state_machine()
 
 
     def check_states(self):
@@ -84,7 +108,8 @@ class StateMachine(object):
                 success_tucking = self.play_motion_ac.wait_for_result(rospy.Duration(100.0))
 
                 if success_tucking:
-                    rospy.loginfo("%s: Arm tuck: ", self.play_motion_ac.get_result())
+                    #rospy.loginfo("%s: Arm tuck: ", self.play_motion_ac.get_result())
+                    rospy.loginfo("%s: Arm tuck: ", self.node_name)
                     self.state = 2
                 else:
                     self.play_motion_ac.cancel_goal()
@@ -144,6 +169,270 @@ class StateMachine(object):
 
         rospy.loginfo("%s: State machine finished!", self.node_name)
         return
+
+
+
+    def e_level_state_machine(self):
+        '''
+        A simple state machine connecting topics and the like to solve the E-level problem of picking up and placing the cube on
+        the other table.
+        '''
+
+        while not rospy.is_shutdown() and (self.state != -1 or self.state != -2): # -1 is supposed to be the state where the robot is finished.
+
+            '''
+
+            1. Complete picking task
+                1.1. Raise robot torso
+
+                1.2. Tuck arm as in video
+
+                1.3. Adjust height?
+
+                1.4. Navigate arm to cube
+
+                1.5. Pick up cube.
+
+
+
+            2. Carry cube to second table
+                2.1 Rotate robot 180 degrees / pi radians
+
+                2.2 Move to target.
+
+
+
+            3. Complete placing task
+
+            '''
+            '''
+            # State 0:  Raise robot head service
+            if self.state == 0:
+            	try:
+                    rospy.loginfo("%s: Raising robot head", self.node_name)
+                    move_head_srv = rospy.ServiceProxy(self.mv_head_srv_nm, MoveHead)
+                    move_head_req = move_head_srv("up")
+                    
+                    if move_head_req.success == True:
+                        self.state = 1
+                        rospy.loginfo("%s: Move head up succeded!", self.node_name)
+                    else:
+                        rospy.loginfo("%s: Move head up failed!", self.node_name)
+                        self.state = -2
+
+                    rospy.sleep(3)
+                
+                except rospy.ServiceException, e:
+                    print "Service call to move_head server failed: %s"%e
+            '''
+            
+
+            # State 0:  Tuck arm. Robot starts out standing in correct position to pick up cube. Thus we move arm first.
+            if self.state == 0:
+
+                # Move this to later in the code? When we move?
+                '''
+                localization_srv = rospy.ServiceProxy(self.localization_srv_nm, SetBool)
+                localization_req = localization_srv()
+
+                clear_costmaps_srv = rospy.ServiceProxy(self.clear_cmaps_srv_nm, Empty)
+                clear_costmaps_request = clear_costmaps_srv()
+                '''
+
+                rospy.sleep(1)
+
+                rospy.loginfo("%s: Tucking the arm...", self.node_name)
+                goal = PlayMotionGoal()
+                goal.motion_name = 'home'
+                goal.skip_planning = True
+                self.play_motion_ac.send_goal(goal)
+                success_tucking = self.play_motion_ac.wait_for_result(rospy.Duration(100.0))
+
+                if success_tucking:
+                    rospy.loginfo("%s: Arm tuck: ", self.play_motion_ac.get_result())
+                    self.state = 1
+                else:
+                    self.play_motion_ac.cancel_goal()
+                    rospy.logerr("%s: play_motion failed to tuck arm, reset simulation", self.node_name)
+                    self.state = -2 # -2 is the error handling state. Something has gone wrong.
+
+                rospy.sleep(3)
+
+            if self.state == 1:
+                try:
+                    rospy.loginfo("%s: Attempting to pick up cube...", self.node_name)
+                    # Define message with cube location
+
+                    cube_msg = make_target_message(self.cube_location, PoseStamped())
+                    self.aruco_pose_pub.publish(cube_msg)
+
+                    pick_up_srv = rospy.ServiceProxy(self.pick_srv_nm, SetBool)
+                    pick_up_request = pick_up_srv()
+
+                    if pick_up_request.success == True:
+                        print('Cube is grabbed!')
+
+                        self.state = 2
+
+                    else:
+                        self.play_motion_ac.cancel_goal()
+                        rospy.loginfo("%s: Pick up failed!", self.node_name)
+                        self.state = -2
+
+                    rospy.sleep(3)
+
+                except rospy.ServiceException, e:
+                    self.play_motion_ac.cancel_goal()
+                    self.state = -1
+                    print('Service call to pick_up_srv failed: %s' %e)
+
+            '''
+            # State 2:  Move the robot to the other desk.
+            if self.state == 2:
+                # Rotate the robot
+                move_msg = Twist()
+                move_msg.angular.z = -1
+                move_msg.linear.x = 0
+
+                rate = rospy.Rate(10)
+                converged = False
+                cnt = 0
+                rospy.loginfo("%s: Rotate robot", self.node_name)
+                while not rospy.is_shutdown() and cnt < 30:
+                    self.cmd_vel_pub.publish(move_msg)
+                    rate.sleep()
+                    cnt = cnt + 1
+
+                rospy.sleep(3)
+
+                # Stop the robot
+
+                move_msg = Twist()
+                self.cmd_vel_pub.publish(move_msg)
+
+                # Drive the robot forwards
+
+                move_msg.linear.x = 1
+                move_msg.angular.z = 0
+                cnt = 0
+                while not rospy.is_shutdown() and cnt < 10:
+                    self.cmd_vel_pub.publish(move_msg)
+                    rate.sleep()
+                    cnt = cnt + 1
+
+                self.state = 4
+
+                rospy.sleep(3)
+
+                # Stop the robot
+
+                move_msg = Twist()
+                self.cmd_vel_pub.publish(move_msg)
+            '''
+            '''
+            if self.state == 4:
+
+                place_srv = rospy.ServiceProxy(self.place_srv_nm, SetBool)
+                place_request = place_srv()
+
+                if place_request.success:
+
+                    self.state = -1
+
+                    rospy.loginfo('%s: Cube successfully placed!', self.node_name)
+
+                else:
+
+                    self.state = -2
+
+                    rospy.loginfo('%s: Cube was not successfully placed!', self.node_name)
+
+                rospy.sleep(3)
+            '''
+
+            # Attempt to get placement pose
+            if self.state == 2:
+
+                place_pose = rospy.wait_for_message(self.place_pose_top, PoseStamped, 5) # Successfully get position for placing cube.
+
+
+                print(place_pose) # place_pose is given in the map frame, meaning the robot is travelling to the completely wrong place.
+                # How to convert this to the robot frame given that no transform is defined for us?
+                # Odom might be the map frame / origo
+                goal = MoveBaseGoal()
+
+                goal.target_pose = place_pose
+                self.move_base_ac.send_goal(goal)
+                success_navigation = self.move_base_ac.wait_for_result(rospy.Duration(60.0))
+
+                if success_navigation:
+                    rospy.loginfo('%s: Placement position reached!', self.node_name)
+                    self.state = -1
+
+                else:
+                    self.move_base_ac.cancel_goal()
+                    self.state = -2
+
+                rospy.sleep(3)
+
+
+
+            if self.state == -1:
+
+                print('Done!')
+
+                return
+
+
+
+            # Error handling
+            if self.state == -2:
+                rospy.logerr("%s: State machine failed. Check your code and try again!", self.node_name)
+                return
+
+
+def make_target_message(target_location, message_type):
+    # Function that takes in the cube location and returns a PoseStamped message with the same info.
+
+    target_message = message_type
+
+    target_location_list = make_double_list(target_location)
+    # Sets position of cube
+    target_message.pose.position.x = target_location_list[0]
+    target_message.pose.position.y = target_location_list[1]
+    target_message.pose.position.z = target_location_list[2]
+
+    # Sets quaternion orientation of cube
+    target_message.pose.orientation.x = target_location_list[3]
+    target_message.pose.orientation.y = target_location_list[4]
+    target_message.pose.orientation.z = target_location_list[5]
+    target_message.pose.orientation.w = target_location_list[6]
+
+    #target_message.header.frame_id = 'odom'
+
+    target_message.header.seq = 1
+    target_message.header.stamp = rospy.Time.now()
+    target_message.header.frame_id = "base_footprint" # Should this be base_footprint
+
+    return target_message
+
+def make_double_list(target_location):
+    # Since the target_location is a string, we need to split it into doubles or whatever.
+
+    target_location += ','
+
+    tmp_str = ''
+    result_list = []
+
+    for i in target_location:
+        if i != ',':
+            tmp_str += i
+        else:
+            result_list.append(float(tmp_str))
+            tmp_str = ''
+
+    return result_list
+
 
 
 # import py_trees as pt, py_trees_ros as ptr
