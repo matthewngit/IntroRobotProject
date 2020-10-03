@@ -3,7 +3,7 @@
 
   <!-- ROS PARAMETERS -->
   <!-- Initial robot pose in Gazebo: change for levels A, C or E (F for demo)-->
-  <arg name="student_level"         default="C"/>
+  <arg name="student_level"         default="A"/>
 
   <!-- System level -->
   <arg name="namespace_tiago"     default="/"/>
@@ -58,13 +58,13 @@
     </include> -->
 
     <!-- AMCL Localization -->
-<!--     <include file="$(find tiago_2dnav)/launch/localization_$(arg localization).launch">
+     <include file="$(find tiago_2dnav)/launch/localization_$(arg localization).launch">
       <arg name="multiple"  value="$(arg multiple)"/>
       <arg name="tf_prefix" value="$(arg tf_prefix)"/>
     </include> -->
 
     <!-- Planning: move_base stack -->
-<!--    <include file="$(find tiago_2dnav)/launch/move_$(arg planner).launch">
+    <include file="$(find tiago_2dnav)/launch/move_$(arg planner).launch">
       <arg name="global_planner" value="$(arg global_planner)"/>
       <arg name="local_planner"  value="$(arg local_planner)"/>
       <arg name="public_sim"     value="$(arg public_sim)"/>
@@ -94,7 +94,7 @@
     </node>
 
     <!-- Goal robot poses for navigation -->
-<!--     <node pkg="robotics_project" type="poses_pub.py" name="poses_publisher" output="screen">
+     <node pkg="robotics_project" type="poses_pub.py" name="poses_publisher" output="screen">
       <param name="pick_pose"         value="-1.1480, -6.1, -0.001, 0.0, 0.0, -0.709307863674, 0.70489882574"/>
       <param name="place_pose"        value="2.6009, -1.7615, 0.0, 0.0, 0.0, 0.0, 1"/>
       <param name="pick_pose_topic"   value="/pick_pose_topic_val"/>
@@ -133,7 +133,7 @@
 
 
   <!-- Map providers -->
-<!--  <group if="$(arg provide_map)">
+  <group if="$(arg provide_map)">
     <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_path)/map.yaml"/>
     <node name="relay_map" pkg="topic_tools" type="relay" args="/map /vo_map"/>
   </group> -->
