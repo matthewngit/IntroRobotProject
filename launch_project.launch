@@ -75,7 +75,7 @@
 
   <group ns="$(arg namespace_project)">
     <!-- Mission planner -->
-    <node pkg="robotics_project" type="bt_students.py" name="logic_state_machine" output="screen">
+    <node pkg="robotics_project" type="bt_students.py" name="behaviour_tree" output="screen"> <!--Default "screen" for output-->
       <param name="global_loc_srv"      value="/global_localization"/>
       <param name="clear_costmaps_srv"  value="/move_base/clear_costmaps"/>
       <param name="pick_srv"            value="/$(arg namespace_project)/pick_the_cube"/>
@@ -90,7 +90,7 @@
       <param name="robot_base_frame"    value="/base_footprint" />  <!-- Try base_link / base_footprint?-->
       <param name="move_head_srv"       value="/$(arg namespace_project)/move_head_gui"/>
       <param name="amcl_estimate"       value="/amcl_pose" />
-      <param name="move_base_feedback"  value="map" />
+      <param name="move_base_feedback"  value="/base_footprint"/> 
     </node>
 
     <!-- Goal robot poses for navigation -->

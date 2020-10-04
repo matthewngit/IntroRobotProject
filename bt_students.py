@@ -9,9 +9,17 @@ from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from sensor_msgs.msg import JointState
 import sys
+import warnings
 from std_srvs.srv import Empty, SetBool, SetBoolRequest  
 
+from gazebo_msgs.msg import ModelState 
+from gazebo_msgs.srv import SetModelState
+
 global_cube_pose = None
+global_cmd_vel_pub = None
+global_play_motion_ac = None
+global_cube_reset_msg = None
+global_cube_reset = None
 head_pose = "down"
 is_kidnapped = False
 is_kidnapped_list = [False] * 4 # One check for every node that might be reset. Localization (0), navigate_pick (1), detect cube (2), navigate_place (3)
@@ -38,6 +46,18 @@ class detect_cube(pt.behaviour.Behaviour):
 		rospy.loginfo("Initialising cube detection check behaviour.")
 
 		super(detect_cube, self).__init__(name)
+	def reset_vars(self):
+		global global_cube_pose
+		global head_pose
+		global is_kidnapped_list
+
+		print("Checking for if kidnapped during cube detection:")
+		print(is_kidnapped_list)
+
+		global_cube_pose = None
+		self.found = False
+		head_pose = "up"
+		#is_kidnapped_list[2] = False
 
 	def update(self):
 		global is_kidnapped
@@ -49,9 +69,7 @@ class detect_cube(pt.behaviour.Behaviour):
 		#rate = rospy.Rate(10)
 
 		if is_kidnapped_list[2]:
-			global_cube_pose = None
-			self.found = False
-			is_kidnapped_list[2] = False
+			self.reset_vars()
 		
 		if self.found and not is_kidnapped_list[2]:
 			return pt.common.Status.SUCCESS
@@ -80,11 +98,86 @@ class detect_cube(pt.behaviour.Behaviour):
 			self.found = True
 			return pt.common.Status.SUCCESS
 
-		#self.cmd_vel_pub.publish(self.move_msg)
+class final_check(pt.behaviour.Behaviour):
 
-		#rate.sleep()
+	'''
+	Returns whether the cube is already detected or not
+	'''
 
-		# tell the tree that you're running
+	def __init__(self, name, aruco_pose_top):
+
+		self.aruco_pose_top = aruco_pose_top
+
+		self.mv_head_srv_nm = rospy.get_param(rospy.get_name() + '/move_head_srv')
+		self.move_head_srv = rospy.ServiceProxy(self.mv_head_srv_nm, MoveHead)
+
+		rospy.loginfo("Initialising cube detection check behaviour.")
+
+		super(final_check, self).__init__(name)
+
+	def reset_vars(self):
+		global global_cube_pose
+		global head_pose
+		global is_kidnapped_list
+
+		print("Checking for if kidnapped during final cube detection:")
+		print(is_kidnapped_list)
+
+		global_cube_pose = None
+		head_pose = "up"
+
+	def update(self):
+		global global_cube_pose
+		global head_pose
+		global is_kidnapped_list
+
+		try:
+			#if head_pose == "up":
+			self.move_head_srv("down")
+			rospy.sleep(5)
+			head_pose = "down"
+			global_cube_pose = rospy.wait_for_message(self.aruco_pose_top, PoseStamped, 2)
+		
+		except:
+			global_cube_pose = None
+			#is_kidnapped = True
+			is_kidnapped_list[1], is_kidnapped_list[2], is_kidnapped_list[3] = True, True, True
+
+
+
+		if not global_cube_pose:
+			print('Cube was not detected on placement area. Returning to pick-up position.')
+			# Reset cube location?
+			self.move_head_srv("up")
+			rospy.sleep(5)
+			head_pose = "up"
+
+			move_msg = Twist()
+			move_msg.angular.z = 1
+
+			counter = 0
+			while counter < 30:
+				global_cmd_vel_pub.publish(move_msg)
+				counter += 1
+
+			print("Tucking arm...")
+			goal = PlayMotionGoal()
+			goal.motion_name = 'home'
+			goal.skip_planning = True
+			global_play_motion_ac.send_goal(goal)
+			global_play_motion_ac.wait_for_result(rospy.Duration(20.0))
+			try:
+				print("Attempting to reset cube position...")
+				global_cube_reset(global_cube_reset_msg)
+			except:
+				print("Cube was not able to be reset!")
+			
+			return pt.common.Status.RUNNING
+
+		else:
+			print('Cube is detected on final table. Mission complete.')
+			sys.exit(0)
+			return pt.common.Status.SUCCESS
 
 class localise_self(pt.behaviour.Behaviour):
 	# the localization step
@@ -94,13 +187,7 @@ class localise_self(pt.behaviour.Behaviour):
 		self.move_msg = Twist()
 		self.move_msg.angular.z = -1
 		self.counter = 0
-		#move_head_req = self.move_head_srv("up")
-		# Try to reset AMCL with a new request?
-		#clear_costmaps_req = self.clear_costmaps_srv()
-		#rospy.sleep(5)
-
-		localization_req = self.localization_srv()
-
+		self.localization_srv()
 
 	def __init__(self, name, loc_srv, clear_cmaps_srv):
 
@@ -117,23 +204,8 @@ class localise_self(pt.behaviour.Behaviour):
 		self.move_head_srv = rospy.ServiceProxy(self.mv_head_srv_nm, MoveHead)
 		#self.localization_srv = rospy.ServiceProxy(loc_srv_nm, Empty)
 		self.localization_srv = loc_srv
-		localization_req = self.localization_srv()
+		self.localization_srv()
 
-		#self.clear_costmaps_srv = rospy.ServiceProxy(clear_cmaps_srv_nm, Empty)
-
-		'''
-		self.localization_srv = rospy.ServiceProxy(loc_srv_nm, Empty)
-		self.clear_costmaps_srv = rospy.ServiceProxy(clear_cmaps_srv_nm, Empty)
-
-		self.localization_req = self.localization_srv()
-		self.clear_costmaps_req = self.clear_costmaps_srv()
-
-		rospy.sleep(3)'''
-		'''
-		move_head_req = self.move_head_srv("up")
-
-		rospy.sleep(5)
-		'''
 		super(localise_self, self).__init__(name)
 
 	def update(self):
@@ -149,13 +221,14 @@ class localise_self(pt.behaviour.Behaviour):
 
 		if is_kidnapped_list[0]:
 			self.reset_vars()
-			#self.localized = False
+			self.localized = False # Seems to work anyway?
+
+			print("Checking for if kidnapped during localisation:")
+			print(is_kidnapped_list)
+
 			is_kidnapped_list[0] = False
 			#self.counter = 0
-			print("*****************************\n*****************************\n*****************************\n*****************************")
-			print("Oh no, I'm retar...\n I mean I have been kidnapped!!!")
-			print("*****************************\n*****************************\n*****************************\n*****************************")
-
+			
 
 		if head_pose == "down":
 			move_head_req = self.move_head_srv("up")
@@ -167,9 +240,6 @@ class localise_self(pt.behaviour.Behaviour):
 		self.cmd_vel_pub.publish(self.move_msg)
 		rate.sleep()
 
-		
-		
-		#clear_costmaps_req = self.clear_costmaps_srv()
 		# while not fully spun increase counter.
 		if self.counter < self.max_count:
 			self.counter += 1
@@ -181,7 +251,6 @@ class localise_self(pt.behaviour.Behaviour):
 			self.cmd_vel_pub.publish(self.move_msg)
 
 			particle_cloud = rospy.wait_for_message("/amcl_pose", PoseWithCovarianceStamped, 5)
-			#print(particle_cloud.pose.covariance)
 			
 			#if any element in the particle cloud is 0.03 or smaller, we say that it has converged
 			if particle_cloud_is_converged(particle_cloud):
@@ -194,7 +263,6 @@ class localise_self(pt.behaviour.Behaviour):
 				self.reset_vars()
 				return pt.common.Status.FAILURE
 
-
 def particle_cloud_is_converged(particle_cloud):
 	#if any element in the particle cloud is 0.03 or smaller, we say that it has converged
 
@@ -205,7 +273,7 @@ def particle_cloud_is_converged(particle_cloud):
 		if abs(element) > abs(max_element):
 			max_element = element
 			
-	if abs(max_element) < 0.1:
+	if abs(max_element) < 0.05: # 0.1 seems reasonable so far
 		#print(max_element)
 		return True 
 	return False
@@ -213,7 +281,10 @@ def particle_cloud_is_converged(particle_cloud):
 class navigation(pt.behaviour.Behaviour):
 
 	def activation_callback(self):
+		global head_pose
 		print("The navigation action client has been activated.")
+		self.move_head_srv("up")
+		head_pose = "up"
 
 	def kidnapped_callback(self, feedback): # Cancel goals if kidnapped?
 		global is_kidnapped
@@ -225,22 +296,50 @@ class navigation(pt.behaviour.Behaviour):
 			self.finished_navigation = False
 			self.success_navigation = None
 			if self.goal_string == "pick":
-				is_kidnapped_list[0] = True
-				is_kidnapped_list[1] = True
+				is_kidnapped_list[0], is_kidnapped_list[1] = True, True
 			elif self.goal_string == "place":
-				is_kidnapped_list[0] = True
-				is_kidnapped_list[1] = True
-				is_kidnapped_list[2] = True
+				#is_kidnapped_list[0], is_kidnapped_list[1], is_kidnapped_list[2], is_kidnapped_list[3] = True, True, True, True
 				is_kidnapped_list[3] = True
 
 			self.move_base_ac.cancel_all_goals()
 
 	def goal_callback(self, state, result):
 		rospy.loginfo("I got a result")
-		#self.success_navigation = True
-		if actionlib.TerminalState.SUCCEEDED == state:
-			self.success_navigation = True
+		# Should have one for preempted, too
 
+		# This seems to be a contributing factor for why the navigation client usually results in oscillating around end point.
+		# When we just returned true this was less likely, I think.
+		'''
+		if (actionlib.TerminalState.ABORTED) == state: #or actionlib.TerminalState.PREEMPTED) == state: # Hopefully this should return a false if the action server can't call it a success.
+			print("Goal aborted!")
+			print("State: ")
+			print(state)
+			self.success_navigation = False
+			if self.goal_string == "pick":
+
+				# Set a message backing up slightly
+
+				print("Gasing slightly")
+				
+				back_msg = Twist()
+				back_msg.linear.x = 1
+
+				for i in range(10):
+					global_cmd_vel_pub.publish(back_msg)
+
+				is_kidnapped_list[0], is_kidnapped_list[1], is_kidnapped_list[2] = True, True, True
+			elif self.goal_string == "place":
+
+				# Set a message backing up slightly?
+				is_kidnapped_list[0] = True
+				is_kidnapped_list[3] = True
+
+			self.move_base_ac.cancel_all_goals()
+		else:
+			self.success_navigation = True
+			self.move_base_ac.cancel_all_goals()
+		'''
+		self.success_navigation = True
 
 	def __init__(self, name, goal_string, move_base_ac):
 		self.finished_navigation = False
@@ -251,6 +350,9 @@ class navigation(pt.behaviour.Behaviour):
 		self.goal_string = goal_string
 		self.goal_msg = MoveBaseGoal()
 		self.success_navigation = None
+
+		self.mv_head_srv_nm = rospy.get_param(rospy.get_name() + '/move_head_srv')
+		self.move_head_srv = rospy.ServiceProxy(self.mv_head_srv_nm, MoveHead)
 		
 		# Might be necessary to actually define a MoveBaseGoal message explicitly.
 		
@@ -258,17 +360,12 @@ class navigation(pt.behaviour.Behaviour):
 			rospy.loginfo("Initialising pick behaviour.")
 			self.pick_pose_top = rospy.get_param(rospy.get_name() + '/pick_pose_topic')
 			self.goal = rospy.wait_for_message(self.pick_pose_top, PoseStamped, 5)
-			#print("The pick message: ")
-			#print(self.goal)
 			self.goal_msg.target_pose = self.goal
-			#self.goal_msg.target_pose.pose.position.y += 0.5
 
 		elif goal_string == 'place':
 			rospy.loginfo("Initialising place behaviour.")
 			self.place_pose_top = rospy.get_param(rospy.get_name() + '/place_pose_topic')
 			self.goal = rospy.wait_for_message(self.place_pose_top, PoseStamped, 5)
-			#print("The place message: ")
-			#print(self.goal)
 			self.goal_msg.target_pose = self.goal
 
 		else:
@@ -276,28 +373,50 @@ class navigation(pt.behaviour.Behaviour):
 
 		super(navigation, self).__init__(name)
 
+
+	def reset_vars(self):
+		self.finished_navigation = False
+		self.success_navigation = None
+
+		if self.goal_string == "pick":
+			self.goal = rospy.wait_for_message(self.pick_pose_top, PoseStamped, 5)
+
+		else:
+			self.goal = rospy.wait_for_message(self.place_pose_top, PoseStamped, 5)
+		
+		self.goal_msg.target_pose = self.goal
+
 	def update(self):
 		global is_kidnapped
 		global is_kidnapped_list
 		
 		if is_kidnapped_list[1] and self.goal_string == "pick":
 
-			self.finished_navigation = False
-			self.success_navigation = None
-			self.goal = rospy.wait_for_message(self.pick_pose_top, PoseStamped, 5)
-			self.goal_msg.target_pose = self.goal
+			if not is_kidnapped_list[3]:
+				print("Tucking arm...")
+				tuckarm() # replace this with pregrasp and home
+
+			print("Checking for if kidnapped during pick:")
+			print(is_kidnapped_list)
+			self.reset_vars()
 			is_kidnapped_list[1] = False
 
 		elif is_kidnapped_list[3] and self.goal_string == "place":
 
-			self.finished_navigation = False
-			self.success_navigation = None
-			self.goal = rospy.wait_for_message(self.place_pose_top, PoseStamped, 5)
-			self.goal_msg.target_pose = self.goal
+			print("Checking for if kidnapped during place:")
+			print(is_kidnapped_list)
+			self.reset_vars()
 			is_kidnapped_list[3] = False
 
-
+		'''
 		if self.finished_navigation and not is_kidnapped_list[1] and not is_kidnapped_list[3]:
+			return pt.common.Status.SUCCESS
+		'''
+
+		if not is_kidnapped_list[1] and (self.goal_string == "pick" and self.finished_navigation):
+			return pt.common.Status.SUCCESS
+
+		if not is_kidnapped_list[3] and (self.goal_string == "place" and self.finished_navigation):
 			return pt.common.Status.SUCCESS
 
 		try:
@@ -317,7 +436,8 @@ class navigation(pt.behaviour.Behaviour):
 			self.goal_msg.target_pose = self.goal
 
 			self.move_base_ac.send_goal(self.goal_msg, active_cb=self.activation_callback, feedback_cb=self.kidnapped_callback, done_cb=self.goal_callback)
-			self.success_navigation = self.move_base_ac.wait_for_result(rospy.Duration(120.0))
+			#self.success_navigation = self.move_base_ac.wait_for_result(rospy.Duration(120.0))
+			self.move_base_ac.wait_for_result(rospy.Duration(120.0))
 			print('Success navigation:')
 			print(self.success_navigation)
 
@@ -352,6 +472,8 @@ class navigation(pt.behaviour.Behaviour):
 
 		else:
 			return pt.common.Status.RUNNING'''
+
+		# meme
 		
 class pick_up(pt.behaviour.Behaviour):
 	
@@ -367,16 +489,20 @@ class pick_up(pt.behaviour.Behaviour):
 
 	def update(self):
 
+		global is_kidnapped_list
+
+		if is_kidnapped_list[2]: # If the robot has to navigate back to pick... originally [1]. Why?
+			print("Checking for if kidnapped during pick_up action itself:")
+			print(is_kidnapped_list)
+			is_kidnapped_list[2] = False
+			self.picked_up = False 
+
 		if self.picked_up:
 			return pt.common.Status.SUCCESS
 
 		self.aruco_pose_pub.publish(global_cube_pose)
 		self.pick_up_request = self.pick_up_srv()
 
-		#print(global_cube_pose)
-
-		if self.picked_up:
-			return pt.common.Status.SUCCESS
 
 		if self.pick_up_request.success:
 
@@ -386,17 +512,12 @@ class pick_up(pt.behaviour.Behaviour):
 		
 		elif not self.pick_up_request.success:
 			print('Grabbing the cube failed!')
+			# Make backup?
 			return pt.common.Status.FAILURE
-		'''
-		else:
-			return pt.common.Status.RUNNING
-		'''
 
 class place(pt.behaviour.Behaviour):
 	
 	def __init__(self, name, place_srv_nm, aruco_pose_pub):
-		
-		
 		self.aruco_pose_pub = aruco_pose_pub
 		self.place_srv = rospy.ServiceProxy(place_srv_nm, SetBool)
 		self.placed = False
@@ -406,6 +527,10 @@ class place(pt.behaviour.Behaviour):
 		super(place, self).__init__(name)
 
 	def update(self):
+		global is_kidnapped_list
+
+		if is_kidnapped_list[3]: # If the robot has to navigate back to pick...
+			self.placed = False 
 
 		if self.placed:
 			return pt.common.Status.SUCCESS
@@ -423,6 +548,35 @@ class place(pt.behaviour.Behaviour):
 		
 		elif not self.place_request.success:
 			print('Placing the cube failed!')
+
+			move_msg = Twist()
+			move_msg.angular.z = 1
+
+			counter = 0
+			while counter < 30:
+				global_cmd_vel_pub.publish(move_msg)
+				counter += 1
+
+
+			print("Tucking arm...")
+			goal = PlayMotionGoal()
+			goal.motion_name = 'home'
+			goal.skip_planning = True
+			global_play_motion_ac.send_goal(goal)
+			global_play_motion_ac.wait_for_result(rospy.Duration(20.0))
+
+			try:
+				print("Attempting to reset cube position...")
+				global_cube_reset(global_cube_reset_msg)
+			except:
+				print("Cube was not able to be reset!")
+
+			is_kidnapped_list[1] = True # navigate to pick
+			is_kidnapped_list[2] = True # detect the cube
+			is_kidnapped_list[3] = True # Navigate to place
+
+
+
 			return pt.common.Status.FAILURE
 		'''
 		else:
@@ -432,7 +586,6 @@ class place(pt.behaviour.Behaviour):
 class A_level_BehaviourTree(ptr.trees.BehaviourTree):	
 
 	'''
-
 	Tasks necessary for the A-grade project:
 
     1. Robot has localized itself in the apartment.
@@ -452,16 +605,20 @@ class A_level_BehaviourTree(ptr.trees.BehaviourTree):
 	Obs 2: The robot uses a particle filter for localization. 
 	Use the state of the distribution of the particles to know when the filter has converged. 
 	Other solutions will not be accepted.
-
 	'''
 	
 	def __init__(self):
+
+		global global_cmd_vel_pub
+		global global_play_motion_ac
+		global global_cube_reset_msg
+		global global_cube_reset
 
 		rospy.loginfo("Initialising behaviour tree")
 
 		# Access ROS parameters:
 
-		#self.cmd_vel_top = rospy.get_param(rospy.get_name() + '/cmd_vel_topic')
+		self.cmd_vel_top = rospy.get_param(rospy.get_name() + '/cmd_vel_topic')
 		self.mv_head_srv_nm = rospy.get_param(rospy.get_name() + '/move_head_srv')
 		self.localization_srv_nm = rospy.get_param(rospy.get_name() + '/global_loc_srv')
 		self.clear_cmaps_srv_nm = rospy.get_param(rospy.get_name() + '/clear_costmaps_srv')
@@ -472,15 +629,32 @@ class A_level_BehaviourTree(ptr.trees.BehaviourTree):
 		self.place_pose_top = rospy.get_param(rospy.get_name() + '/place_pose_topic')
 		self.amcl_estimate_top = rospy.get_param(rospy.get_name() + '/amcl_estimate')
 
-
-
 		self.localization_srv = rospy.ServiceProxy(self.localization_srv_nm, Empty)
 		self.clear_costmaps_srv = rospy.ServiceProxy(self.clear_cmaps_srv_nm, Empty)
-		
 
+		global_cube_reset_msg = ModelState()
+
+		### - Reset pose for the cube, to be used later - ###
+
+		global_cube_reset_msg.model_name = 'aruco_cube'
+		global_cube_reset_msg.pose.position.x = -1.130530
+		global_cube_reset_msg.pose.position.y = -6.653650
+		global_cube_reset_msg.pose.position.z = 0.86250
+		global_cube_reset_msg.pose.orientation.x = 0
+		global_cube_reset_msg.pose.orientation.y = 0 # roll
+		global_cube_reset_msg.pose.orientation.z = 0
+		global_cube_reset_msg.pose.orientation.w = 1 # pitch
+
+		### - Reset pose for the cube, to be used later - ###
+		
 		# Wait for service providers
 
-		#self.cube_detector = detect_cube('cube detection', self.aruco_pose_top)
+		### - Reset Cube position service - ###
+
+		rospy.wait_for_service('/gazebo/set_model_state')
+		global_cube_reset = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
+
+		### - Reset Cube position service - ###
 
 		rospy.wait_for_service(self.mv_head_srv_nm, timeout = 30)
 		rospy.wait_for_service(self.pick_srv_nm, timeout = 30)
@@ -494,7 +668,9 @@ class A_level_BehaviourTree(ptr.trees.BehaviourTree):
 		self.clear_costmaps_req = self.clear_costmaps_srv()
 
 		# Instantiate publishers
-		#self.cmd_vel_pub = rospy.Publisher(self.cmd_vel_top, Twist, queue_size=10)
+
+		global_cmd_vel_pub = rospy.Publisher(self.cmd_vel_top, Twist, queue_size=10)
+
 		self.aruco_pose_pub = rospy.Publisher(self.aruco_pose_top, PoseStamped, queue_size=10)
 
 		# Set up action clients
@@ -503,6 +679,8 @@ class A_level_BehaviourTree(ptr.trees.BehaviourTree):
 		if not self.play_motion_ac.wait_for_server(rospy.Duration(1000)):
 			rospy.logerr("%s: Could not connect to /play_motion action server")
 			exit()
+
+		global_play_motion_ac = self.play_motion_ac
 		
 		rospy.loginfo("%s: Waiting for move_base action server...")
 		self.move_base_ac = SimpleActionClient("/move_base", MoveBaseAction)
@@ -511,7 +689,6 @@ class A_level_BehaviourTree(ptr.trees.BehaviourTree):
 			exit()
 		rospy.loginfo("%s: Connected to /move_base action server")
         
-
 		rospy.sleep(1)
 
 		# The "home" reset/initialization pose neccessary for each run
@@ -526,10 +703,10 @@ class A_level_BehaviourTree(ptr.trees.BehaviourTree):
 		branch_2 = navigation("pick navigation", "pick", self.move_base_ac)
 
 		# to detect cube, move head down and then use aruco detection
-		branch_3 = detect_cube('Detect cube', self.aruco_pose_top)
+		branch_3 = detect_cube("detect cube", self.aruco_pose_top)
 
 		# pick up the cube
-		branch_4 = pick_up('pick_up', self.pick_srv_nm, self.aruco_pose_pub) # We should not have to publish cube pose again! Dum dum
+		branch_4 = pick_up("pick_up", self.pick_srv_nm, self.aruco_pose_pub) # We should not have to publish cube pose again! Dum dum
 
 		# redoing branch_1 with a new destination (place pose)
 
@@ -539,10 +716,12 @@ class A_level_BehaviourTree(ptr.trees.BehaviourTree):
 
 		# putting down the cube in the same relative pose as we picked it up with
 		# of course at the 'place pose' instead of the 'pick pose'
-		branch_7 = place('place', self.place_srv_nm, self.aruco_pose_pub) # Move head down?
+		branch_7 = place("place", self.place_srv_nm, self.aruco_pose_pub) # Move head down?
+
+		branch_8 = final_check("final check", self.aruco_pose_top)
 
 		# become the tree
-		tree = RSequence(name="Main sequence", children=[branch_0, branch_1, branch_2, branch_3, branch_4, branch_5, branch_6, branch_7])
+		tree = RSequence(name="Main sequence", children=[branch_0, branch_1, branch_2, branch_3, branch_4, branch_5, branch_6, branch_7, branch_8])
 		super(A_level_BehaviourTree, self).__init__(tree)
 
 		# execute the behaviour tree
@@ -555,8 +734,9 @@ class A_level_BehaviourTree(ptr.trees.BehaviourTree):
 
 if __name__ == "__main__":
 
+	warnings.filterwarnings("ignore")
 
-	rospy.init_node('main_state_machine')
+	rospy.init_node('main_behaviour_tree')
 	try:
 		#BehaviourTree()
 		A_level_BehaviourTree()
