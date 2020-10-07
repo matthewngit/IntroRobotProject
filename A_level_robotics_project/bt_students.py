@@ -57,7 +57,6 @@ class detect_cube(pt.behaviour.Behaviour):
 		head_pose = "up"
 
 	def update(self):
-		global is_kidnapped
 		global global_cube_pose
 		global head_pose
 		global reset_list
@@ -244,7 +243,7 @@ def particle_cloud_is_converged(particle_cloud):
 			max_element = element
 	
 	#check if max_element is smaller than 0.05
-	if abs(max_element) < 0.04: # Setting harder demands (will cause spinning, but less tableleg crashing)
+	if abs(max_element) < 0.045: # Setting harder demands (will cause spinning, but less tableleg crashing)
 		return True 
 	return False
 
@@ -264,6 +263,7 @@ class navigation(pt.behaviour.Behaviour):
 		particle_cloud = rospy.wait_for_message("/amcl_pose", PoseWithCovarianceStamped, 5)
 
 		if not particle_cloud_is_converged(particle_cloud):
+			print("Kidnap detected through AMCL.")
 			# we're not done, if we're kidnapped
 			self.finished_navigation = False
 			self.success_navigation = False
@@ -286,8 +286,9 @@ class navigation(pt.behaviour.Behaviour):
 		# a simple check to see if the navigation was aborted or preempted
 		# if so, then we've most likely been kidnapped or hit a wall
 		# activate the list of "redo:s"
-		if (actionlib.TerminalState.ABORTED or actionlib.TerminalState.PREEMPTED) == state: 
+		if (state == actionlib.TerminalState.ABORTED) or (state == actionlib.TerminalState.PREEMPTED): 
 			self.success_navigation = False
+			print("Goal Aborted.")
 			# activate the reset list
 			reset_list[0], reset_list[1], reset_list[2], reset_list[3] = True, True, True, True
 			try:
@@ -477,6 +478,7 @@ class place(pt.behaviour.Behaviour):
 		elif not self.place_request.success:
 			# if this fails, thanks to not actually holding the cube
 			# we need to try again
+			print('The attempt to place the cube has failed\n Trying again from "pick"')
 
 			# reset arm position to prevent crashes
 			tuckarm_during_run()
